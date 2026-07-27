@@ -3,13 +3,29 @@ from db_loader import load_heroes_from_db, load_compositions_from_db
 HEROES = load_heroes_from_db()  # pulls all 40 heroes from Neon at startup
 COMPOSITIONS = load_compositions_from_db()  # pulls all 9 compositions from Neon at startup
 
-WEIGHTS = {
-    "early": {"flex": 3.0, "counter": 1.0, "synergy": 0.5, "role_need": 1.0, "comp_fit": 0.0, "meta": 1.0},
-    "mid": {"flex": 1.0, "counter": 2.0, "synergy": 1.5, "role_need": 1.5, "comp_fit": 2.0, "meta": 0.5},
-    "late": {"flex": 0.2, "counter": 2.0, "synergy": 1.0, "role_need": 2.5, "comp_fit": 2.5, "meta": 0.3},
+# Directed: key comp is considered strong against every comp in its value set.
+# This is a judgment call about MLBB strategy, not a scraped/verified fact --
+# treat it as a starting draft to correct from your own competitive experience.
+COMPOSITION_COUNTERS = {
+    "dive_burst": {"protect_the_carry", "poke_siege"},
+    "protect_the_carry": {"split_push", "sustain_grind"},
+    "poke_siege": {"all_in_lockdown", "five_man_teamfight"},
+    "split_push": {"five_man_teamfight", "all_in_lockdown"},
+    "five_man_teamfight": {"pick_off_burst", "sustain_grind"},
+    "pick_off_burst": {"protect_the_carry", "poke_siege"},
+    "sustain_grind": {"pick_off_burst", "dive_burst"},
+    "all_in_lockdown": {"dive_burst", "pick_off_burst"},
+    "anti_tank_execute": {"sustain_grind", "all_in_lockdown"},
 }
 
-TURN_STRUCTURE = [1, 2, 2, 2, 2, 1]
+WEIGHTS = {
+    "early": {"flex": 3.0, "counter": 1.0, "synergy": 0.5, "role_need": 1.0, "comp_fit": 0.0, "meta": 1.0,
+              "comp_counter": 0.0},
+    "mid": {"flex": 1.0, "counter": 2.0, "synergy": 1.5, "role_need": 1.5, "comp_fit": 2.0, "meta": 0.5,
+            "comp_counter": 1.5},
+    "late": {"flex": 0.2, "counter": 2.0, "synergy": 1.0, "role_need": 2.5, "comp_fit": 2.5, "meta": 0.3,
+             "comp_counter": 2.0},
+}
 
 
 def predict_composition(ally_picks):
@@ -47,11 +63,20 @@ def score_hero(hero_name, ally_picks, enemy_picks, phase):  # gets called for ev
             ally_tags.add(t)
     synergy_score = len(hero["archetypes"] & ally_tags)  # how many tags this candidate shares with our team so far
 
-    have_roles = {HEROES[h]["role"] for h in ally_picks}  # set of roles we've already picked
-    role_need_score = 1.0 if hero["role"] not in have_roles else 0.0  # 1 if this hero fills a role we don't have yet
+    have_lanes = {HEROES[h]["lane"] for h in ally_picks}  # which of the 5 lanes are already taken
+    lane_need_score = 1.0 if hero["lane"] not in have_lanes else 0.0  # 1 if this hero fills an empty lane
 
     target_comp, missing_tags = predict_composition(ally_picks)  # see what comp we're building
     comp_fit_score = len(hero["archetypes"] & missing_tags)  # hero's tags cover any of what that comp still needs?
+
+    enemy_comp, _ = predict_composition(enemy_picks)  # what comp is the enemy building?
+    hypothetical_picks = ally_picks + [hero_name]  # what if we added this hero to our team?
+    our_comp_if_picked, _ = predict_composition(hypothetical_picks)
+    if enemy_comp is not None and our_comp_if_picked is not None and enemy_comp in COMPOSITION_COUNTERS.get(
+            our_comp_if_picked, set()):
+        comp_counter_score = 1.0  # picking this hero would push us toward a comp that beats theirs
+    else:
+        comp_counter_score = 0.0
 
     meta_score = hero["meta_strength"] / 10
 
@@ -59,8 +84,9 @@ def score_hero(hero_name, ally_picks, enemy_picks, phase):  # gets called for ev
             w["flex"] * flex_score
             + w["counter"] * counter_score
             + w["synergy"] * synergy_score
-            + w["role_need"] * role_need_score
+            + w["role_need"] * lane_need_score
             + w["comp_fit"] * comp_fit_score
+            + w["comp_counter"] * comp_counter_score
             + w["meta"] * meta_score
     )
 
@@ -83,70 +109,3 @@ def recommend_picks(ally_picks, enemy_picks, phase):
                 scored[j], scored[j + 1] = scored[j + 1], scored[j]
 
     return scored
-
-
-def get_turn_team(turn_index):  # whose turn to pick
-    return "ally" if turn_index % 2 == 0 else "enemy"  # ally goes on even turns, enemy on odd turns
-
-
-def get_phase(pick_number, total_picks=5):  # at what draft phase we are at
-    if pick_number <= max(1, total_picks // 3):
-        return "early"
-    elif pick_number <= max(2, (total_picks * 2) // 3):
-        return "mid"
-    return "late"
-
-
-def find_hero(name_input, available):  # if name entered differently this will try to find
-    normalized = name_input.strip().lower().replace(" ", "_")
-    for h in available:
-        if h.lower() == normalized:
-            return h
-    return None  # no match found, caller will ask again
-
-
-def ask_for_hero(prompt_text, available):
-    while True:  # keep asking until we get something valid
-        raw = input(prompt_text)
-        match = find_hero(raw, available)
-        if match is not None:
-            return match
-        print(f"  Couldn't match '{raw}' to an available hero. Try again.")
-
-
-def run_draft():
-    ally_picks = []
-    enemy_picks = []
-
-    for turn_index, picks_this_turn in enumerate(TURN_STRUCTURE):  # pair value with its pos
-        team = get_turn_team(turn_index)
-
-        for pick_count in range(picks_this_turn):
-            available = []
-            for h in HEROES:
-                if h not in ally_picks and h not in enemy_picks:
-                    available.append(h)
-
-            if team == "ally":
-                phase = get_phase(len(ally_picks) + 1)
-                ranked = recommend_picks(ally_picks, enemy_picks, phase)
-                print(f"\n--- Turn {turn_index + 1} [{phase.upper()}] YOUR PICK ---")
-                print("Top recommendations:")
-                for i, (hero_name, score) in enumerate(ranked[:5], start=1):
-                    print(f"  {i}. {hero_name}  (score {score:.2f})")
-                picked = ask_for_hero("Enter the hero you're locking in: ", available)
-                ally_picks.append(picked)
-
-            else:
-                print(f"\n--- Turn {turn_index + 1} ENEMY PICK ---")
-                picked = ask_for_hero("Enter what the enemy just picked: ", available)
-                enemy_picks.append(picked)
-
-    print("\nFinal ally team:", ally_picks)
-    print("Final enemy team:", enemy_picks)
-
-    final_comp, final_missing = predict_composition(ally_picks)
-    print(f"Final predicted comp: {final_comp} | still missing tags: {final_missing}")
-
-
-run_draft()
