@@ -19,12 +19,12 @@ COMPOSITION_COUNTERS = {
 }
 
 WEIGHTS = {
-    "early": {"flex": 3.0, "counter": 1.0, "synergy": 0.5, "role_need": 1.0, "comp_fit": 0.0, "meta": 1.0,
-              "comp_counter": 0.0},
+    "early": {"flex": 2.5, "counter": 1.0, "synergy": 0.5, "role_need": 1.0, "comp_fit": 0.0, "meta": 3.0,
+              "comp_counter": 0.0, "scarcity": 2.5},
     "mid": {"flex": 1.0, "counter": 2.0, "synergy": 1.5, "role_need": 1.5, "comp_fit": 2.0, "meta": 0.5,
-            "comp_counter": 1.5},
+            "comp_counter": 1.5, "scarcity": 1.0},
     "late": {"flex": 0.2, "counter": 2.0, "synergy": 1.0, "role_need": 2.5, "comp_fit": 2.5, "meta": 0.3,
-             "comp_counter": 2.0},
+             "comp_counter": 2.0, "scarcity": 0.3},
 }
 
 
@@ -80,6 +80,18 @@ def score_hero(hero_name, ally_picks, enemy_picks, phase):  # gets called for ev
 
     meta_score = hero["meta_strength"] / 10
 
+    same_lane_others = [  # every other still-available hero in this same lane
+        HEROES[o]["meta_strength"] for o in HEROES
+        if HEROES[o]["lane"] == hero["lane"]
+           and o != hero_name and o not in ally_picks and o not in enemy_picks
+    ]
+    if same_lane_others:
+        gap = hero["meta_strength"] - max(
+            same_lane_others)  # how much stronger this hero is than the next-best option in its lane
+        scarcity_score = max(gap, 0) / 10  # floor at 0 -- being weaker than the alternative isn't a bonus
+    else:
+        scarcity_score = 0.0  # no other options left in this lane to compare against
+
     return (
             w["flex"] * flex_score
             + w["counter"] * counter_score
@@ -88,14 +100,20 @@ def score_hero(hero_name, ally_picks, enemy_picks, phase):  # gets called for ev
             + w["comp_fit"] * comp_fit_score
             + w["comp_counter"] * comp_counter_score
             + w["meta"] * meta_score
+            + w["scarcity"] * scarcity_score
     )
 
 
 def recommend_picks(ally_picks, enemy_picks, phase):
+    ally_lanes_filled = {HEROES[h]["lane"] for h in ally_picks}  # lanes already covered by our own picks
+
     available = []  # will hold every hero name that's still pickable
     for h in HEROES:  # loops over every hero that exists in the database
-        if h not in ally_picks and h not in enemy_picks:  # skip it if either side already took it
-            available.append(h)
+        if h in ally_picks or h in enemy_picks:  # skip it if either side already took it
+            continue
+        if HEROES[h]["lane"] in ally_lanes_filled:  # skip it if its lane is already covered -- no redundant picks
+            continue
+        available.append(h)
 
     scored = []  # will hold (hero_name, score) pairs so we don't lose track of which score belongs to which hero
     for h in available:

@@ -1,4 +1,4 @@
-from scoring import HEROES, recommend_picks, predict_composition
+from scoring import HEROES, COMPOSITION_COUNTERS, recommend_picks, predict_composition
 
 TURN_STRUCTURE = [1, 2, 2, 2, 2, 1]
 
@@ -77,6 +77,13 @@ def run_draft():
                 phase = get_phase(len(ally_picks) + 1)
                 print()
                 print_role_tracker(ally_picks)  # show current squad + missing roles before recommending
+
+                enemy_comp, enemy_missing = predict_composition(enemy_picks)
+                if enemy_comp:
+                    print(f"Enemy appears to be building: {enemy_comp} (still missing: {enemy_missing})")
+                else:
+                    print("Enemy comp not clear yet.")
+
                 ranked = recommend_picks(ally_picks, enemy_picks, phase)
                 print(f"\n--- Turn {turn_index + 1} [{phase.upper()}] YOUR PICK ---")
                 print("Top recommendations:")
@@ -98,5 +105,56 @@ def run_draft():
     print(f"Final predicted comp: {final_comp} | still missing tags: {final_missing}")
 
 
-if __name__ == "__main__":
-    run_draft()
+def show_info_menu():
+    while True:
+        print("\n=== INFO MENU ===")
+        print("1. Look up a hero's counters")
+        print("2. List all heroes by lane")
+        print("3. List composition matchups")
+        print("4. Back")
+        choice = input("Choose an option: ").strip()
+
+        if choice == "1":
+            all_names = list(HEROES.keys())
+            name_input = input("Hero name: ").strip()
+            match = find_hero(name_input, all_names)
+            if match is None:
+                print(f"  Couldn't find a hero matching '{name_input}'.")
+                continue
+            hero = HEROES[match]
+            print(f"\n{match} -- {hero['role']}, {hero['lane']} lane, meta_strength {hero['meta_strength']}/10")
+            counters_str = ", ".join(hero["counters"]) if hero["counters"] else "none listed"
+            countered_by_str = ", ".join(hero["countered_by"]) if hero["countered_by"] else "none listed"
+            print(f"  Counters: {counters_str}")
+            print(f"  Countered by: {countered_by_str}")
+
+        elif choice == "2":
+            for lane in ALL_LANES:
+                heroes_in_lane = [h for h in HEROES if HEROES[h]["lane"] == lane]
+                print(f"{lane:8s}: {', '.join(heroes_in_lane)}")
+
+        elif choice == "3":
+            print("\nComposition matchups (left beats right):")
+            for comp, beats in COMPOSITION_COUNTERS.items():
+                print(f"  {comp:20s} beats: {', '.join(beats)}")
+
+        elif choice == "4":
+            break
+
+        else:
+            print("  Not a valid option, try again.")
+
+
+def main():
+    print("=== MLBB Draft Engine ===")
+    choice = input("Do you want (1) Info or (2) Start Drafting? ").strip()
+    if choice == "1":
+        show_info_menu()
+        again = input("\nStart drafting now? (y/n): ").strip().lower()
+        if again in ("y", "yes"):
+            run_draft()
+    else:
+        run_draft()
+
+
+main()
